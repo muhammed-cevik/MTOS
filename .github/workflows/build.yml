@@ -10,88 +10,98 @@ on:
 
 jobs:
   build:
-    name: Build MT OS
+    name: Build MT OS (Normal + Limbo)
     runs-on: ubuntu-latest
 
     steps:
-      # ─── Checkout ──────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ─── Bağımlılıklar ─────────────────────────────────────────────────────
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            gcc \
-            python3 \
-            lua5.4 \
-            dosfstools \
-            mtools \
-            zip \
-            tree
+            gcc python3 lua5.4 \
+            busybox-static \
+            linux-image-generic \
+            dosfstools mtools \
+            syslinux syslinux-common extlinux \
+            cpio gzip zip tree
           python3 --version
           lua5.4 -v
-          gcc --version | head -1
+          ls /boot/vmlinuz-* | tail -1
 
-      # ─── Python Syntax Kontrolü ────────────────────────────────────────────
       - name: Check Python syntax
         run: |
-          echo "── Python syntax check ──"
           python3 -m py_compile shell/shell.py
           python3 -m py_compile games/guess.py
           python3 -m py_compile games/snake.py
           python3 -m py_compile games/maze.py
-          echo "✓ Tüm Python dosyaları geçerli"
+          echo "✓ Python syntax OK"
 
-      # ─── Lua Syntax Kontrolü ──────────────────────────────────────────────
       - name: Check Lua syntax
         run: |
-          echo "── Lua syntax check ──"
-          lua5.4 -e "loadfile('lua/game.lua')" && echo "✓ game.lua geçerli"
-          lua5.4 -e "loadfile('lua/hello.lua')" && echo "✓ hello.lua geçerli"
+          lua5.4 -e "loadfile('lua/game.lua')" && echo "✓ game.lua OK"
+          lua5.4 -e "loadfile('lua/hello.lua')" && echo "✓ hello.lua OK"
 
-      # ─── C Kernel Derleme ─────────────────────────────────────────────────
       - name: Compile C Kernel
         run: |
-          echo "── C Kernel build ──"
-          gcc -o build_kernel kernel/kernel.c -Wall -O2
-          echo "✓ Kernel derlendi: $(ls -lh build_kernel)"
+          mkdir -p build
+          gcc -o build/mtos_kernel kernel/kernel.c -Wall -O2
+          echo "✓ C kernel: $(ls -lh build/mtos_kernel)"
 
-      # ─── IMG + ZIP Build ──────────────────────────────────────────────────
-      - name: Build IMG and ZIP
+      - name: Build Normal IMG + ZIP
         run: |
-          echo "── Full build ──"
           chmod +x scripts/build.sh
           bash scripts/build.sh
-          echo "── Dist içeriği ──"
+
+      - name: Build Limbo/QEMU IMG
+        run: |
+          chmod +x scripts/build_limbo.sh
+          sudo bash scripts/build_limbo.sh
+
+      - name: Show dist
+        run: |
+          echo "── dist/ içeriği ──"
           tree dist/ || ls -lh dist/
 
-      # ─── Artifacts Upload ─────────────────────────────────────────────────
-      - name: Upload IMG artifact
+      - name: Upload normal IMG
         uses: actions/upload-artifact@v4
         with:
           name: mtos-img
           path: dist/mtos.img
           retention-days: 30
 
-      - name: Upload ZIP artifact
+      - name: Upload Limbo IMG
         uses: actions/upload-artifact@v4
         with:
-          name: mtos-release-zip
-          path: dist/MTOS-release.zip
+          name: mtos-limbo-img
+          path: dist/mtos-limbo.img
           retention-days: 30
 
-      - name: Upload build folder
+      - name: Upload bzImage
         uses: actions/upload-artifact@v4
         with:
-          name: mtos-build
-          path: build/
-          retention-days: 7
+          name: mtos-bzImage
+          path: dist/bzImage
+          retention-days: 30
 
-  # ─── Release (sadece tag push'ta) ─────────────────────────────────────────
+      - name: Upload initrd
+        uses: actions/upload-artifact@v4
+        with:
+          name: mtos-initrd
+          path: dist/initrd.img
+          retention-days: 30
+
+      - name: Upload Limbo ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: mtos-limbo-zip
+          path: dist/MTOS-Limbo.zip
+          retention-days: 30
+
   release:
-    name: Create GitHub Release
+    name: GitHub Release
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -103,17 +113,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download IMG
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: mtos-img
           path: ./release-files/
 
-      - name: Download ZIP
-        uses: actions/download-artifact@v4
-        with:
-          name: mtos-release-zip
-          path: ./release-files/
+      - name: List files
+        run: find ./release-files -type f | sort
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -125,26 +131,52 @@ jobs:
             Python + C + Lua tabanlı mini terminal işletim sistemi.
 
             ### 📦 İndirilenler
+
             | Dosya | Açıklama |
             |-------|----------|
-            | `mtos.img` | Disk imajı (32MB FAT32) |
-            | `MTOS-release.zip` | Tüm kaynak + binary |
+            | `MTOS-Limbo.zip` | 📱 **Limbo PC için hazır paket** |
+            | `mtos-limbo.img` | Limbo disk imajı (128MB) |
+            | `bzImage` | Linux kernel |
+            | `initrd.img` | Initramfs (Python + Lua + MT OS) |
+            | `mtos.img` | Standart FAT32 disk imajı |
 
-            ### 🚀 Hızlı Başlangıç
-            ```bash
-            unzip MTOS-release.zip
-            bash run.sh
+            ### 📱 Limbo PC Emulator Kurulum
+
+            1. [Limbo PC Emulator](https://github.com/limboemu/limbo)'yi Android'e kur
+            2. `MTOS-Limbo.zip`'i indir ve aç
+            3. Limbo'yu aç ve şu ayarları yap:
+
+            ```
+            Architecture  : x86
+            CPU           : qemu32
+            RAM           : 256 MB
+            Hard Disk A   : mtos-limbo.img
+            Kernel        : bzImage
+            Initrd        : initrd.img
+            Kernel cmdline: console=ttyS0 quiet
+            Display       : None (VNC veya console)
             ```
 
-            ### 💻 QEMU ile çalıştır
+            4. ▶ Play!
+
+            ### 💻 QEMU ile (PC)
             ```bash
-            qemu-system-x86_64 -drive format=raw,file=mtos.img -m 256M
+            qemu-system-x86_64 \
+              -kernel bzImage \
+              -initrd initrd.img \
+              -append "console=ttyS0 quiet" \
+              -nographic -m 256M
             ```
 
             ### 🎮 Komutlar
-            `ls` `cd` `mkdir` `rm` `writef` `edfile` `cat` `lua` `games` `help`
+            `ls` `cd` `mkdir` `rm` `writef` `edfile` `lua` `games` `help`
+
           files: |
-            ./release-files/mtos.img
-            ./release-files/MTOS-release.zip
+            ./release-files/mtos-limbo-zip/MTOS-Limbo.zip
+            ./release-files/mtos-limbo-img/mtos-limbo.img
+            ./release-files/mtos-bzImage/bzImage
+            ./release-files/mtos-initrd/initrd.img
+            ./release-files/mtos-img/mtos.img
           draft: false
           prerelease: false
+          
