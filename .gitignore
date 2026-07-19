@@ -1,0 +1,9 @@
+build/
+dist/
+*.img
+*.o
+*.pyc
+__pycache__/
+mtos_kernel
+.mtos_history
+*.zip
